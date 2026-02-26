@@ -14,6 +14,9 @@ from ..models_pace_band import simulate_lap_delta_bands
 from .pipeline_season import run_one_meeting
 
 OPENF1_BASE_URL = "https://api.openf1.org/v1"
+MIN_CLEAN_LAPS = 8
+TRIM_Q = 0.05
+RPI_BASELINE_TOP_K = 3
 
 
 @dataclass
@@ -170,6 +173,22 @@ def _compute_qpi(quali_laps: pd.DataFrame, **_: Any) -> pd.DataFrame:
     return best[["driver_number", "qpi_pct"]]
 
 
+def _trimmed_stats(values: pd.Series, q: float = TRIM_Q) -> tuple[float, int, float, float]:
+    arr = pd.to_numeric(values, errors="coerce").dropna().to_numpy(dtype=float)
+    if arr.size == 0:
+        return (np.nan, 0, np.nan, np.nan)
+    lo = np.quantile(arr, q)
+    hi = np.quantile(arr, 1.0 - q)
+    trimmed = arr[(arr >= lo) & (arr <= hi)]
+    if trimmed.size == 0:
+        return (np.nan, 0, np.nan, np.nan)
+    median = float(np.median(trimmed))
+    count = int(trimmed.size)
+    sd = float(np.std(trimmed, ddof=0))
+    iqr = float(np.quantile(trimmed, 0.75) - np.quantile(trimmed, 0.25))
+    return (median, count, sd, iqr)
+
+
 def _build_feat_metrics(
     race_laps: pd.DataFrame,
     race_pit: pd.DataFrame,
@@ -191,22 +210,39 @@ def _build_feat_metrics(
     if clean.empty:
         clean = laps.copy()
 
-    grp = clean.groupby("driver_number")["lap_time_ms"]
-    q1 = grp.quantile(0.25).rename("q1")
-    q3 = grp.quantile(0.75).rename("q3")
-    iqr = (q3 - q1).rename("cs_iqr_ms")
-    lap_stats = pd.concat(
-        [
-            grp.median().rename("clean_lap_median_ms"),
-            grp.count().rename("clean_lap_count"),
-            grp.std(ddof=0).rename("cs_sd_ms"),
-            iqr,
-        ],
-        axis=1,
-    ).reset_index()
+    raw_counts = clean.groupby("driver_number")["lap_time_ms"].count().rename("raw_clean_lap_count")
+    valid_drivers = raw_counts[raw_counts >= MIN_CLEAN_LAPS].index
+    clean = clean[clean["driver_number"].isin(valid_drivers)].copy()
+    if not raw_counts.empty:
+        print(
+            "[DBG] clean_lap_count min/median/max="
+            f"{int(raw_counts.min())}/{float(raw_counts.median()):.1f}/{int(raw_counts.max())} "
+            f"(MIN_CLEAN_LAPS={MIN_CLEAN_LAPS}, kept={len(valid_drivers)}/{len(raw_counts)})"
+        )
 
-    ref = float(lap_stats["clean_lap_median_ms"].min())
-    lap_stats["rpi_pct"] = ((lap_stats["clean_lap_median_ms"] - ref) / ref) * 100.0
+    rows: list[dict[str, Any]] = []
+    for driver, g in clean.groupby("driver_number"):
+        med, cnt, sd, iqr = _trimmed_stats(g["lap_time_ms"], q=TRIM_Q)
+        rows.append(
+            {
+                "driver_number": driver,
+                "clean_lap_median_ms": med,
+                "clean_lap_count": cnt,
+                "cs_sd_ms": sd,
+                "cs_iqr_ms": iqr,
+            }
+        )
+    lap_stats = pd.DataFrame(rows)
+    if lap_stats.empty:
+        base = fact_race[["driver_number"]].copy()
+        for col in ["rpi_pct", "clean_lap_median_ms", "clean_lap_count", "cs_sd_ms", "cs_iqr_ms", "pit_median_ms", "pit_count", "sfd"]:
+            base[col] = np.nan
+        base["session_id"] = int(race_session_key)
+        return base
+
+    top_k = min(RPI_BASELINE_TOP_K, len(lap_stats))
+    baseline = float(np.median(np.sort(lap_stats["clean_lap_median_ms"].to_numpy(dtype=float))[:top_k]))
+    lap_stats["rpi_pct"] = ((lap_stats["clean_lap_median_ms"] - baseline) / baseline) * 100.0
 
     if pits.empty:
         pit_stats = pd.DataFrame({"driver_number": lap_stats["driver_number"], "pit_median_ms": np.nan, "pit_count": 0})

@@ -11,10 +11,16 @@ def main() -> None:
     outputs = run_meeting_by_country(engine, year=TARGET_YEAR, country_name=TARGET_COUNTRY)
     print(f"[DONE] run finished: country={TARGET_COUNTRY}, sessions={len(outputs)}")
     if outputs:
-        forecast = outputs[0]["forecast"].sort_values("exp_points", ascending=False)
+        first = outputs[0]
+        forecast = first["forecast"].sort_values("exp_points", ascending=False)
+        print("\n[Forecast Top10]")
         print(forecast.head(10).to_string(index=False))
+
+        if "band_probs" in first:
+            band = first["band_probs"].sort_values("band_a_prob", ascending=False)
+            print("\n[Lap Delta Band Top10]")
+            print(band.head(10).to_string(index=False))
 
 
 if __name__ == "__main__":
     main()
-
