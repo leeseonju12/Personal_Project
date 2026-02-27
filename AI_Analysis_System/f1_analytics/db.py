@@ -14,6 +14,6 @@ def get_engine(db_url: str | None = None) -> Engine:
     2) env F1_DB_URL
     3) local sqlite fallback
     """
-    url = db_url or os.getenv("F1_DB_URL", "sqlite:///f1_analysis.db")
+    url = db_url or os.getenv("F1_DB_URL", "mysql+pymysql://root@127.0.0.1:3306/Spring_project_26_02?charset=utf8mb4")
     return create_engine(url, pool_pre_ping=True)
 

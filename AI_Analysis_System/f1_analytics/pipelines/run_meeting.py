@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any
 
 import numpy as np
@@ -10,7 +11,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from ..models_finish_group import simulate_finish_group_probs
-from ..models_pace_band import simulate_lap_delta_bands
+from ..models_pace_band import LapDeltaBandConfig, simulate_lap_delta_bands
 from ..models_quali_analysis import (
     compute_best_lap_qpi,
     compute_improvement,
@@ -19,6 +20,7 @@ from ..models_quali_analysis import (
     compute_teammate_delta,
     simulate_quali_probs,
 )
+from ..models_strategy_analysis import StrategyAnalysisConfig, build_strategy_analysis
 from .pipeline_season import run_one_meeting
 
 OPENF1_BASE_URL = "https://api.openf1.org/v1"
@@ -170,19 +172,45 @@ def _prepare_pit(race_pit: pd.DataFrame) -> pd.DataFrame:
     work = race_pit.copy()
     if work.empty:
         return pd.DataFrame(columns=["driver_number", "stop_number", "pit_ms"])
+
     def _series(col: str, default: Any = np.nan) -> pd.Series:
         if col in work.columns:
             return work[col]
         return pd.Series([default] * len(work), index=work.index)
 
     work["driver_number"] = pd.to_numeric(work.get("driver_number"), errors="coerce")
-    work["stop_number"] = pd.to_numeric(_series("stop_number", 1), errors="coerce").fillna(1).astype(int)
+    # Keep source stop_number if available, otherwise generate sequential stop number per driver.
+    has_source_stop = "stop_number" in work.columns
+    work["stop_number"] = pd.to_numeric(_series("stop_number", np.nan), errors="coerce")
     if "pit_duration" in work.columns and "pit_ms" not in work.columns:
         work["pit_ms"] = pd.to_numeric(work["pit_duration"], errors="coerce") * 1000.0
     elif "stop_duration" in work.columns and "pit_ms" not in work.columns:
         work["pit_ms"] = pd.to_numeric(work["stop_duration"], errors="coerce") * 1000.0
     work["pit_ms"] = pd.to_numeric(work.get("pit_ms"), errors="coerce")
-    return work.dropna(subset=["driver_number", "pit_ms"])
+    work["lap_number"] = pd.to_numeric(_series("lap_number", np.nan), errors="coerce")
+    work["date"] = pd.to_datetime(_series("date", pd.NaT), errors="coerce")
+
+    work = work.dropna(subset=["driver_number", "pit_ms"]).copy()
+    if work.empty:
+        return pd.DataFrame(columns=["driver_number", "stop_number", "pit_ms"])
+
+    if (not has_source_stop) or work["stop_number"].isna().any():
+        # Stable order per driver then enumerate 1..N to avoid PK collisions.
+        work = work.sort_values(["driver_number", "lap_number", "date"], na_position="last").copy()
+        work["stop_number"] = work.groupby("driver_number").cumcount() + 1
+    else:
+        work["stop_number"] = work["stop_number"].astype(int)
+
+    # Hard guard: collapse duplicated PK candidates if source still contains duplicates.
+    dup_mask = work.duplicated(["driver_number", "stop_number"], keep=False)
+    if dup_mask.any():
+        dup_n = int(dup_mask.sum())
+        print(f"[WARN] duplicate pit keys in source: rows={dup_n}. keeping last record per key.")
+        work = work.sort_values(["driver_number", "stop_number", "lap_number", "date"]).drop_duplicates(
+            ["driver_number", "stop_number"], keep="last"
+        )
+
+    return work[["driver_number", "stop_number", "pit_ms"]]
 
 
 def _compute_qpi(quali_laps: pd.DataFrame, **_: Any) -> pd.DataFrame:
@@ -338,6 +366,10 @@ def _save_outputs_to_db(engine: Engine, **kwargs: Any) -> None:
         pit_df = pit_df.copy()
         pit_df["session_id"] = race_session_key
         pit_df = pit_df[["session_id", "driver_number", "stop_number", "pit_ms"]]
+        dup_pk = pit_df.duplicated(["session_id", "driver_number", "stop_number"], keep=False)
+        if dup_pk.any():
+            print("[WARN] duplicate fact_pitstop PK rows detected before insert. deduplicating by keep=last.")
+            pit_df = pit_df.drop_duplicates(["session_id", "driver_number", "stop_number"], keep="last")
         pit_df = _align_to_table(pit_df, "fact_pitstop")
         pit_df.to_sql("fact_pitstop", engine, if_exists="append", index=False)
 
@@ -373,6 +405,51 @@ def _save_outputs_to_db(engine: Engine, **kwargs: Any) -> None:
     ]
     forecast = _align_to_table(forecast, "forecast_race")
     forecast.to_sql("forecast_race", engine, if_exists="append", index=False)
+
+
+def _save_quali_forecast_to_db(
+    engine: Engine,
+    target_session_id: int,
+    quali_forecast: pd.DataFrame,
+    quali_summary: pd.DataFrame,
+) -> None:
+    if quali_forecast.empty:
+        return
+
+    q = quali_forecast.copy()
+    q["target_session_id"] = int(target_session_id)
+    if not quali_summary.empty and {"driver_number", "qpi_pct"}.issubset(quali_summary.columns):
+        q = q.merge(quali_summary[["driver_number", "qpi_pct"]], on="driver_number", how="left")
+    else:
+        q["qpi_pct"] = np.nan
+    q["exp_qpi_mean"] = pd.to_numeric(q.get("qpi_pct"), errors="coerce")
+    q["exp_qpi_sigma"] = pd.to_numeric(q.get("sigma_q"), errors="coerce")
+    q = q[
+        [
+            "target_session_id",
+            "driver_number",
+            "exp_qpi_mean",
+            "exp_qpi_sigma",
+            "pole_prob",
+            "top3_prob",
+            "top10_prob",
+            "exp_grid_pos",
+        ]
+    ]
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM forecast_quali WHERE target_session_id = :sid"), {"sid": int(target_session_id)})
+    except Exception as exc:
+        print(f"[WARN] forecast_quali pre-delete skipped: session={target_session_id} err={exc}")
+
+    try:
+        cols = [c["name"] for c in inspect(engine).get_columns("forecast_quali")]
+        if cols:
+            q = q[[c for c in q.columns if c in cols]]
+    except Exception:
+        pass
+    q.to_sql("forecast_quali", engine, if_exists="append", index=False)
 
 
 def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list[dict[str, Any]]:
@@ -416,6 +493,12 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
     except Exception as exc:
         print(f"[WARN] qualifying analysis failed: {exc}")
 
+    # Band sigma can be tuned without code changes.
+    # Example: set F1_BAND_SIGMA=0.20
+    band_sigma = float(os.getenv("F1_BAND_SIGMA", "0.20"))
+    band_sims = int(os.getenv("F1_BAND_SIMS", "10000"))
+    band_cfg = LapDeltaBandConfig(sigma_mode="fixed", fixed_sigma=band_sigma, n_sims=band_sims)
+
     # 2) Race prediction pipeline.
     out = run_one_meeting(
         meeting_key=meeting_key,
@@ -423,7 +506,7 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
         build_fact_race_result=_build_fact_race_result,
         build_feat_metrics=_build_feat_metrics,
         compute_qpi=_compute_qpi,
-        simulate_lap_delta_bands=simulate_lap_delta_bands,
+        simulate_lap_delta_bands=lambda metrics: simulate_lap_delta_bands(metrics, cfg=band_cfg),
         simulate_finish_group_probs=simulate_finish_group_probs,
         save_outputs=lambda **kwargs: _save_outputs_to_db(engine=engine, **kwargs),
         min_driver_count=10,
@@ -434,6 +517,30 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
         return [{"forecast": pd.DataFrame(columns=["driver_number", "exp_points", "top10_prob", "podium_prob"])}]
 
     forecast = out["finish_probs"][["driver_number", "exp_points", "top10_prob", "podium_prob"]].copy()
+
+    race_session_key = int(out.get("race_session_key"))
+    # Persist quali forecast for DB querying.
+    try:
+        _save_quali_forecast_to_db(
+            engine=engine,
+            target_session_id=race_session_key,
+            quali_forecast=quali_forecast,
+            quali_summary=quali_summary,
+        )
+    except Exception as exc:
+        print(f"[WARN] save forecast_quali failed: {exc}")
+
+    # Persist strategy analysis snapshot for DB querying.
+    try:
+        strategy_df = build_strategy_analysis(
+            engine=engine,
+            session_id=race_session_key,
+            cfg=StrategyAnalysisConfig(enable_ir=False, save_table="analysis_strategy", debug=False),
+        )
+    except Exception as exc:
+        print(f"[WARN] save strategy analysis failed: {exc}")
+        strategy_df = pd.DataFrame()
+
     return [
         {
             "forecast": forecast,
@@ -442,6 +549,7 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
             "quali_progress": quali_progress,
             "quali_improvement": quali_improvement,
             "quali_forecast": quali_forecast,
+            "strategy_analysis": strategy_df,
             **out,
         }
     ]

@@ -113,6 +113,21 @@ CREATE TABLE IF NOT EXISTS forecast_race (
   KEY ix_forecast_race_session (target_session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Strategy analysis snapshot per race session
+CREATE TABLE IF NOT EXISTS analysis_strategy (
+  session_id INT NOT NULL,
+  driver_number INT NOT NULL,
+  pit_count INT NULL,
+  pit_median_ms INT NULL,
+  strategy_type VARCHAR(32) NULL,
+  pit_loss_percentile DECIMAL(8,3) NULL,
+  ir_pct DECIMAL(8,3) NULL,
+  n_ir INT NULL,
+  PRIMARY KEY (session_id, driver_number),
+  KEY ix_analysis_strategy_session (session_id),
+  KEY ix_analysis_strategy_driver (driver_number)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Backward-compatible patch for existing environments
 ALTER TABLE feat_driver_session_metrics
   ADD COLUMN IF NOT EXISTS qpi_pct DECIMAL(8,4) NULL AFTER driver_number,

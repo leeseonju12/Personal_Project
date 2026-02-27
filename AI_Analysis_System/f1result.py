@@ -69,7 +69,9 @@ def main() -> None:
 
         race_session_key = first.get("race_session_key")
         if race_session_key is not None:
-            strategy_df = build_strategy_analysis(engine, session_id=int(race_session_key))
+            strategy_df = first.get("strategy_analysis", pd.DataFrame())
+            if strategy_df is None or strategy_df.empty:
+                strategy_df = build_strategy_analysis(engine, session_id=int(race_session_key))
             _print_df_section(
                 "Strategy Analysis Top10",
                 strategy_df,
