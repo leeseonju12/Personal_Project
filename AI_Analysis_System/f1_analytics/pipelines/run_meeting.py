@@ -382,23 +382,7 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
         print(f"[WARN] no meeting found for year={year}, country={country_name}")
         return [{"forecast": pd.DataFrame(columns=["driver_number", "exp_points", "top10_prob", "podium_prob"])}]
 
-    out = run_one_meeting(
-        meeting_key=meeting_key,
-        openf1_get=client.get,
-        build_fact_race_result=_build_fact_race_result,
-        build_feat_metrics=_build_feat_metrics,
-        compute_qpi=_compute_qpi,
-        simulate_lap_delta_bands=simulate_lap_delta_bands,
-        simulate_finish_group_probs=simulate_finish_group_probs,
-        save_outputs=lambda **kwargs: _save_outputs_to_db(engine=engine, **kwargs),
-        min_driver_count=10,
-    )
-
-    if out.get("status") != "ok":
-        print(f"[WARN] meeting skipped: {out}")
-        return [{"forecast": pd.DataFrame(columns=["driver_number", "exp_points", "top10_prob", "podium_prob"])}]
-
-    # Qualifying analysis bundle (optional if quali data exists).
+    # 1) Qualifying analysis first.
     quali_summary = pd.DataFrame()
     quali_sector = pd.DataFrame()
     quali_progress = pd.DataFrame()
@@ -431,6 +415,23 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
             quali_forecast = simulate_quali_probs(best_qpi, quali_laps=laps_quali, sigma_source="per_driver")
     except Exception as exc:
         print(f"[WARN] qualifying analysis failed: {exc}")
+
+    # 2) Race prediction pipeline.
+    out = run_one_meeting(
+        meeting_key=meeting_key,
+        openf1_get=client.get,
+        build_fact_race_result=_build_fact_race_result,
+        build_feat_metrics=_build_feat_metrics,
+        compute_qpi=_compute_qpi,
+        simulate_lap_delta_bands=simulate_lap_delta_bands,
+        simulate_finish_group_probs=simulate_finish_group_probs,
+        save_outputs=lambda **kwargs: _save_outputs_to_db(engine=engine, **kwargs),
+        min_driver_count=10,
+    )
+
+    if out.get("status") != "ok":
+        print(f"[WARN] meeting skipped: {out}")
+        return [{"forecast": pd.DataFrame(columns=["driver_number", "exp_points", "top10_prob", "podium_prob"])}]
 
     forecast = out["finish_probs"][["driver_number", "exp_points", "top10_prob", "podium_prob"]].copy()
     return [

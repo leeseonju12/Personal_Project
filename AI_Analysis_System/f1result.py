@@ -36,21 +36,6 @@ def main() -> None:
     print(f"[DONE] run finished: country={TARGET_COUNTRY}, sessions={len(outputs)}")
     if outputs:
         first = outputs[0]
-        _print_df_section(
-            "Forecast Top10",
-            first.get("forecast", pd.DataFrame()),
-            ["driver_number", "exp_points", "top10_prob", "podium_prob"],
-            sort_by="exp_points",
-        )
-
-        if "band_probs" in first:
-            _print_df_section(
-                "Lap Delta Band Top10",
-                first["band_probs"],
-                ["driver_number", "band_a_prob", "band_b_prob", "band_c_prob", "mu_rpi", "sigma_rpi"],
-                sort_by="band_a_prob",
-            )
-
         if "quali_summary" in first and not first["quali_summary"].empty:
             _print_df_section(
                 "Qualifying Summary Top10",
@@ -65,6 +50,21 @@ def main() -> None:
                 first["quali_forecast"],
                 ["driver_number", "pole_prob", "top3_prob", "top10_prob", "exp_grid_pos", "sigma_q"],
                 sort_by="exp_grid_pos",
+            )
+
+        _print_df_section(
+            "Forecast Top10",
+            first.get("forecast", pd.DataFrame()),
+            ["driver_number", "exp_points", "top10_prob", "podium_prob"],
+            sort_by="exp_points",
+        )
+
+        if "band_probs" in first:
+            _print_df_section(
+                "Lap Delta Band Top10",
+                first["band_probs"],
+                ["driver_number", "band_a_prob", "band_b_prob", "band_c_prob", "mu_rpi", "sigma_rpi"],
+                sort_by="band_a_prob",
             )
 
         race_session_key = first.get("race_session_key")
