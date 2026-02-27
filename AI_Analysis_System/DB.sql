@@ -43,6 +43,23 @@ CREATE TABLE IF NOT EXISTS fact_pitstop (
   KEY ix_pit_ms (pit_ms)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Session dimension for reliable chronological ordering (IR, rolling stats)
+CREATE TABLE IF NOT EXISTS dim_session (
+  session_id INT NOT NULL,
+  meeting_key INT NULL,
+  year INT NULL,
+  round_no INT NULL,
+  session_name VARCHAR(64) NULL,
+  session_type VARCHAR(32) NULL,
+  country_name VARCHAR(64) NULL,
+  meeting_name VARCHAR(128) NULL,
+  date_start DATETIME NULL,
+  date_end DATETIME NULL,
+  PRIMARY KEY (session_id),
+  KEY ix_dim_session_date_start (date_start),
+  KEY ix_dim_session_year (year)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS feat_driver_session_metrics (
   session_id INT NOT NULL,
   driver_number INT NOT NULL,

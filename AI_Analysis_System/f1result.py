@@ -3,6 +3,7 @@ import os
 import pandas as pd
 
 from f1_analytics.db import get_engine
+from f1_analytics.models_strategy_analysis import build_strategy_analysis
 from f1_analytics.pipelines.run_meeting import run_meeting_by_country
 
 TARGET_YEAR = int(os.getenv("F1_YEAR", "2025"))
@@ -64,6 +65,24 @@ def main() -> None:
                 first["quali_forecast"],
                 ["driver_number", "pole_prob", "top3_prob", "top10_prob", "exp_grid_pos", "sigma_q"],
                 sort_by="exp_grid_pos",
+            )
+
+        race_session_key = first.get("race_session_key")
+        if race_session_key is not None:
+            strategy_df = build_strategy_analysis(engine, session_id=int(race_session_key))
+            _print_df_section(
+                "Strategy Analysis Top10",
+                strategy_df,
+                [
+                    "driver_number",
+                    "pit_count",
+                    "pit_median_ms",
+                    "strategy_type",
+                    "pit_loss_percentile",
+                    "ir_pct",
+                    "n_ir",
+                ],
+                sort_by="pit_loss_percentile",
             )
 
 

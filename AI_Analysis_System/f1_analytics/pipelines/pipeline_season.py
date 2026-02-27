@@ -124,6 +124,7 @@ def run_one_meeting(
         "meeting_key": meeting_key,
         "race_session_key": race_session_key,
         "quali_session_key": quali_session_key,
+        "sessions": sessions,
         "race_result": race_result,
         "race_laps": race_laps,
         "race_pit": race_pit,
@@ -160,9 +161,11 @@ def run_one_meeting(
         save_outputs(
             meeting_key=meeting_key,
             race_session_key=race_session_key,
+            sessions=sessions,
             fact_race=fact_race,
             feat_metrics=feat_metrics,
             qpi_df=qpi_df,
+            race_pit=race_pit,
             band_probs=band_probs,
             finish_probs=finish_probs,
         )

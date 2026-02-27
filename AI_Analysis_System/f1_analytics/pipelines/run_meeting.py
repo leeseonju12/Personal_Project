@@ -294,6 +294,8 @@ def _save_outputs_to_db(engine: Engine, **kwargs: Any) -> None:
     fact_race: pd.DataFrame = kwargs["fact_race"]
     feat_metrics: pd.DataFrame = kwargs["feat_metrics"]
     qpi_df: pd.DataFrame = kwargs["qpi_df"]
+    race_pit_raw: pd.DataFrame = kwargs.get("race_pit", pd.DataFrame())
+    sessions_df: pd.DataFrame = kwargs.get("sessions", pd.DataFrame())
     finish_probs: pd.DataFrame = kwargs["finish_probs"]
     race_session_key: int = int(kwargs["race_session_key"])
 
@@ -303,13 +305,19 @@ def _save_outputs_to_db(engine: Engine, **kwargs: Any) -> None:
         q = qpi_df[["driver_number", "qpi_pct"]].copy()
         feat_metrics = feat_metrics.drop(columns=["qpi_pct"]).merge(q, how="left", on="driver_number")
 
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM fact_race_result WHERE session_id = :sid"), {"sid": race_session_key})
-            conn.execute(text("DELETE FROM feat_driver_session_metrics WHERE session_id = :sid"), {"sid": race_session_key})
-            conn.execute(text("DELETE FROM forecast_race WHERE target_session_id = :sid"), {"sid": race_session_key})
-    except Exception as exc:
-        print(f"[WARN] pre-delete skipped: session={race_session_key} err={exc}")
+    delete_specs = [
+        ("fact_race_result", "session_id"),
+        ("feat_driver_session_metrics", "session_id"),
+        ("fact_pitstop", "session_id"),
+        ("forecast_race", "target_session_id"),
+        ("dim_session", "session_id"),
+    ]
+    for table, col in delete_specs:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"DELETE FROM {table} WHERE {col} = :sid"), {"sid": race_session_key})
+        except Exception as exc:
+            print(f"[WARN] pre-delete skipped: table={table} session={race_session_key} err={exc}")
 
     def _align_to_table(df: pd.DataFrame, table_name: str) -> pd.DataFrame:
         try:
@@ -324,6 +332,38 @@ def _save_outputs_to_db(engine: Engine, **kwargs: Any) -> None:
     feat_metrics = _align_to_table(feat_metrics, "feat_driver_session_metrics")
     fact_race.to_sql("fact_race_result", engine, if_exists="append", index=False)
     feat_metrics.to_sql("feat_driver_session_metrics", engine, if_exists="append", index=False)
+
+    pit_df = _prepare_pit(race_pit_raw)
+    if not pit_df.empty:
+        pit_df = pit_df.copy()
+        pit_df["session_id"] = race_session_key
+        pit_df = pit_df[["session_id", "driver_number", "stop_number", "pit_ms"]]
+        pit_df = _align_to_table(pit_df, "fact_pitstop")
+        pit_df.to_sql("fact_pitstop", engine, if_exists="append", index=False)
+
+    if not sessions_df.empty and "session_key" in sessions_df.columns:
+            dim = sessions_df[sessions_df["session_key"] == race_session_key].copy()
+            if not dim.empty:
+                dim = dim.head(1).rename(columns={"session_key": "session_id"})
+                if "round_no" not in dim.columns:
+                    if "round_number" in dim.columns:
+                        dim["round_no"] = dim["round_number"]
+                    elif "round" in dim.columns:
+                        dim["round_no"] = dim["round"]
+                    else:
+                        dim["round_no"] = None
+                if "meeting_name" not in dim.columns:
+                    if "meeting_official_name" in dim.columns:
+                        dim["meeting_name"] = dim["meeting_official_name"]
+                    else:
+                        dim["meeting_name"] = None
+                for c in ["session_id", "meeting_key", "year", "round_no", "session_name", "session_type", "country_name", "meeting_name", "date_start", "date_end"]:
+                    if c not in dim.columns:
+                        dim[c] = None
+                dim = dim[["session_id", "meeting_key", "year", "round_no", "session_name", "session_type", "country_name", "meeting_name", "date_start", "date_end"]]
+                dim["session_id"] = pd.to_numeric(dim["session_id"], errors="coerce").astype("Int64")
+                dim = _align_to_table(dim, "dim_session")
+                dim.to_sql("dim_session", engine, if_exists="append", index=False)
 
     forecast = finish_probs.copy()
     forecast["target_session_id"] = race_session_key
