@@ -1,10 +1,33 @@
 import os
 
+import pandas as pd
+
 from f1_analytics.db import get_engine
 from f1_analytics.pipelines.run_meeting import run_meeting_by_country
 
 TARGET_YEAR = int(os.getenv("F1_YEAR", "2025"))
 TARGET_COUNTRY = os.getenv("F1_COUNTRY", "Mexico")
+
+
+def _print_df_section(title: str, df: pd.DataFrame, columns: list[str], sort_by: str | None = None, head_n: int = 10) -> None:
+    print(f"\n===== {title} =====")
+    if df is None or df.empty:
+        print("(empty)")
+        return
+
+    safe = df.copy()
+    keep = [c for c in columns if c in safe.columns]
+    if not keep:
+        print("(no expected columns)")
+        return
+
+    safe = safe[keep].copy()
+    if sort_by and sort_by in safe.columns:
+        safe = safe.sort_values(sort_by, ascending=True if sort_by in {"qpi_pct", "exp_grid_pos"} else False)
+    safe = safe.head(head_n).reset_index(drop=True)
+    print(safe.to_string(index=False))
+    print("=" * (len(title) + 12))
+
 
 def main() -> None:
     engine = get_engine()
@@ -12,14 +35,36 @@ def main() -> None:
     print(f"[DONE] run finished: country={TARGET_COUNTRY}, sessions={len(outputs)}")
     if outputs:
         first = outputs[0]
-        forecast = first["forecast"].sort_values("exp_points", ascending=False)
-        print("\n[Forecast Top10]")
-        print(forecast.head(10).to_string(index=False))
+        _print_df_section(
+            "Forecast Top10",
+            first.get("forecast", pd.DataFrame()),
+            ["driver_number", "exp_points", "top10_prob", "podium_prob"],
+            sort_by="exp_points",
+        )
 
         if "band_probs" in first:
-            band = first["band_probs"].sort_values("band_a_prob", ascending=False)
-            print("\n[Lap Delta Band Top10]")
-            print(band.head(10).to_string(index=False))
+            _print_df_section(
+                "Lap Delta Band Top10",
+                first["band_probs"],
+                ["driver_number", "band_a_prob", "band_b_prob", "band_c_prob", "mu_rpi", "sigma_rpi"],
+                sort_by="band_a_prob",
+            )
+
+        if "quali_summary" in first and not first["quali_summary"].empty:
+            _print_df_section(
+                "Qualifying Summary Top10",
+                first["quali_summary"],
+                ["driver_number", "best_lap_ms", "qpi_pct", "teammate_delta", "grid_position"],
+                sort_by="qpi_pct",
+            )
+
+        if "quali_forecast" in first and not first["quali_forecast"].empty:
+            _print_df_section(
+                "Qualifying Forecast Top10",
+                first["quali_forecast"],
+                ["driver_number", "pole_prob", "top3_prob", "top10_prob", "exp_grid_pos", "sigma_q"],
+                sort_by="exp_grid_pos",
+            )
 
 
 if __name__ == "__main__":

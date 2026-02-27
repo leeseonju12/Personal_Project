@@ -11,6 +11,14 @@ from sqlalchemy.engine import Engine
 
 from ..models_finish_group import simulate_finish_group_probs
 from ..models_pace_band import simulate_lap_delta_bands
+from ..models_quali_analysis import (
+    compute_best_lap_qpi,
+    compute_improvement,
+    compute_quali_progress,
+    compute_sector_pcts,
+    compute_teammate_delta,
+    simulate_quali_probs,
+)
 from .pipeline_season import run_one_meeting
 
 OPENF1_BASE_URL = "https://api.openf1.org/v1"
@@ -60,6 +68,21 @@ def _pick_meeting_by_country(client: OpenF1Client, year: int, country_name: str)
     if matched.empty:
         return None
     return int(matched.iloc[-1]["meeting_key"])
+
+
+def _find_quali_session_key(client: OpenF1Client, meeting_key: int) -> int | None:
+    sessions = pd.DataFrame(client.get("sessions", {"meeting_key": meeting_key}))
+    if sessions.empty or "session_key" not in sessions.columns:
+        return None
+    text = (
+        sessions.get("session_type", pd.Series("", index=sessions.index)).astype(str)
+        + " "
+        + sessions.get("session_name", pd.Series("", index=sessions.index)).astype(str)
+    ).str.lower()
+    matched = sessions.loc[text.str.contains("quali|qualifying", na=False), "session_key"]
+    if matched.empty:
+        return None
+    return int(matched.iloc[0])
 
 
 def _build_fact_race_result(race_result: pd.DataFrame, race_session_key: int, **_: Any) -> pd.DataFrame:
@@ -335,5 +358,49 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
         print(f"[WARN] meeting skipped: {out}")
         return [{"forecast": pd.DataFrame(columns=["driver_number", "exp_points", "top10_prob", "podium_prob"])}]
 
+    # Qualifying analysis bundle (optional if quali data exists).
+    quali_summary = pd.DataFrame()
+    quali_sector = pd.DataFrame()
+    quali_progress = pd.DataFrame()
+    quali_improvement = pd.DataFrame()
+    quali_forecast = pd.DataFrame()
+
+    try:
+        quali_session_key = _find_quali_session_key(client, meeting_key)
+        if quali_session_key is not None:
+            laps_quali = pd.DataFrame(client.get("laps", {"session_key": quali_session_key}))
+            session_result_quali = pd.DataFrame(client.get("session_result", {"session_key": quali_session_key}))
+
+            best_qpi = compute_best_lap_qpi(laps_quali)
+            teammate_delta = compute_teammate_delta(best_qpi, session_result_quali)
+
+            quali_summary = best_qpi.merge(teammate_delta, on="driver_number", how="left")
+            if not session_result_quali.empty:
+                cols = [c for c in ["driver_number", "team_name", "grid_position", "position"] if c in session_result_quali.columns]
+                if cols:
+                    sr = session_result_quali[cols].copy()
+                    if "position" in sr.columns and "grid_position" not in sr.columns:
+                        sr["grid_position"] = pd.to_numeric(sr["position"], errors="coerce")
+                    sr["driver_number"] = pd.to_numeric(sr["driver_number"], errors="coerce")
+                    keep = [c for c in ["driver_number", "team_name", "grid_position"] if c in sr.columns]
+                    quali_summary = quali_summary.merge(sr[keep], on="driver_number", how="left")
+
+            quali_sector = compute_sector_pcts(laps_quali)
+            quali_progress = compute_quali_progress(laps_quali, session_result_quali)
+            quali_improvement = compute_improvement(laps_quali)
+            quali_forecast = simulate_quali_probs(best_qpi, quali_laps=laps_quali, sigma_source="per_driver")
+    except Exception as exc:
+        print(f"[WARN] qualifying analysis failed: {exc}")
+
     forecast = out["finish_probs"][["driver_number", "exp_points", "top10_prob", "podium_prob"]].copy()
-    return [{"forecast": forecast, **out}]
+    return [
+        {
+            "forecast": forecast,
+            "quali_summary": quali_summary,
+            "quali_sector": quali_sector,
+            "quali_progress": quali_progress,
+            "quali_improvement": quali_improvement,
+            "quali_forecast": quali_forecast,
+            **out,
+        }
+    ]
