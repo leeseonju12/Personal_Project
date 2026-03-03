@@ -112,6 +112,10 @@ def run_one_meeting(
         return {"meeting_key": meeting_key, "status": "skipped", "reason": "race session not found"}
 
     race_result = _to_df(openf1_get("session_result", {"session_key": race_session_key}))
+    race_drivers = _to_df(openf1_get("drivers", {"session_key": race_session_key}))
+    race_starting_grid = _to_df(openf1_get("starting_grid", {"session_key": race_session_key}))
+    if race_starting_grid.empty:
+        race_starting_grid = _to_df(openf1_get("starting_grid", {"meeting_key": meeting_key}))
     race_laps = _to_df(openf1_get("laps", {"session_key": race_session_key}))
     race_pit = _to_df(openf1_get("pit", {"session_key": race_session_key}))
     quali_laps = (
@@ -126,6 +130,8 @@ def run_one_meeting(
         "quali_session_key": quali_session_key,
         "sessions": sessions,
         "race_result": race_result,
+        "race_drivers": race_drivers,
+        "race_starting_grid": race_starting_grid,
         "race_laps": race_laps,
         "race_pit": race_pit,
         "quali_laps": quali_laps,
@@ -165,6 +171,8 @@ def run_one_meeting(
             fact_race=fact_race,
             feat_metrics=feat_metrics,
             qpi_df=qpi_df,
+            race_drivers=race_drivers,
+            race_starting_grid=race_starting_grid,
             race_pit=race_pit,
             band_probs=band_probs,
             finish_probs=finish_probs,

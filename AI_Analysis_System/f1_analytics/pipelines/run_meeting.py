@@ -105,15 +105,22 @@ def _find_quali_session_key(client: OpenF1Client, meeting_key: int) -> int | Non
     return int(matched.iloc[0])
 
 
-def _build_fact_race_result(race_result: pd.DataFrame, race_session_key: int, **_: Any) -> pd.DataFrame:
+def _build_fact_race_result(
+    race_result: pd.DataFrame,
+    race_session_key: int,
+    race_drivers: pd.DataFrame | None = None,
+    race_starting_grid: pd.DataFrame | None = None,
+    **_: Any,
+) -> pd.DataFrame:
     work = race_result.copy()
     if work.empty:
         return pd.DataFrame(
             columns=[
                 "session_id",
                 "driver_number",
+                "driver_name",
                 "team_name",
-                "grid_position",
+                "starting_grid_position",
                 "finish_position",
                 "points",
                 "status",
@@ -145,8 +152,9 @@ def _build_fact_race_result(race_result: pd.DataFrame, race_session_key: int, **
         {
             "session_id": int(race_session_key),
             "driver_number": pd.to_numeric(work.get("driver_number"), errors="coerce").astype("Int64"),
+            "driver_name": pd.NA,
             "team_name": work.get("team_name"),
-            "grid_position": pd.to_numeric(work.get("grid_position"), errors="coerce").astype("Int64"),
+            "starting_grid_position": pd.to_numeric(work.get("grid_position"), errors="coerce").astype("Int64"),
             "finish_position": pd.to_numeric(work.get("finish_position"), errors="coerce").astype("Int64"),
             "points": pd.to_numeric(work.get("points"), errors="coerce"),
             "status": _series("status", "").astype(str),
@@ -158,6 +166,36 @@ def _build_fact_race_result(race_result: pd.DataFrame, race_session_key: int, **
             "duration": _series("duration", None),
         }
     )
+
+    if race_starting_grid is not None and (not race_starting_grid.empty) and "driver_number" in race_starting_grid.columns:
+        sg = race_starting_grid.copy()
+        sg["driver_number"] = pd.to_numeric(sg["driver_number"], errors="coerce").astype("Int64")
+        if "starting_grid_position" in sg.columns:
+            sg["starting_grid_position"] = pd.to_numeric(sg["starting_grid_position"], errors="coerce")
+        elif "position" in sg.columns:
+            sg["starting_grid_position"] = pd.to_numeric(sg["position"], errors="coerce")
+        elif "grid_position" in sg.columns:
+            sg["starting_grid_position"] = pd.to_numeric(sg["grid_position"], errors="coerce")
+        else:
+            sg["starting_grid_position"] = pd.to_numeric(sg.get("grid", np.nan), errors="coerce")
+        sg = sg[["driver_number", "starting_grid_position"]].drop_duplicates("driver_number", keep="last")
+        out = out.merge(sg, how="left", on="driver_number", suffixes=("", "_sg"))
+        out["starting_grid_position"] = out["starting_grid_position"].fillna(out["starting_grid_position_sg"])
+        out = out.drop(columns=["starting_grid_position_sg"], errors="ignore")
+
+    if race_drivers is not None and (not race_drivers.empty) and "driver_number" in race_drivers.columns:
+        ref = race_drivers.copy()
+        ref["driver_number"] = pd.to_numeric(ref["driver_number"], errors="coerce").astype("Int64")
+        for col in ["full_name", "team_name"]:
+            if col not in ref.columns:
+                ref[col] = pd.NA
+        ref = ref[["driver_number", "full_name", "team_name"]].drop_duplicates("driver_number", keep="last")
+        out = out.merge(ref, how="left", on="driver_number", suffixes=("", "_drv"))
+        out["driver_name"] = out["driver_name"].fillna(out["full_name"])
+        out["team_name"] = out["team_name"].fillna(out["team_name_drv"])
+        out = out.drop(columns=["full_name", "team_name_drv"], errors="ignore")
+
+    out["starting_grid_position"] = pd.to_numeric(out.get("starting_grid_position"), errors="coerce").astype("Int64")
     return out.dropna(subset=["driver_number"]).reset_index(drop=True)
 
 
@@ -323,9 +361,9 @@ def _build_feat_metrics(
     out["pit_count"] = out["pit_count"].fillna(0).astype(int)
     out["pit_median_ms"] = out["pit_median_ms"].fillna(out["pit_median_ms"].median())
 
-    if {"driver_number", "grid_position", "finish_position"}.issubset(fact_race.columns):
-        sfd = fact_race[["driver_number", "grid_position", "finish_position"]].copy()
-        sfd["sfd"] = pd.to_numeric(sfd["grid_position"], errors="coerce") - pd.to_numeric(
+    if {"driver_number", "starting_grid_position", "finish_position"}.issubset(fact_race.columns):
+        sfd = fact_race[["driver_number", "starting_grid_position", "finish_position"]].copy()
+        sfd["sfd"] = pd.to_numeric(sfd["starting_grid_position"], errors="coerce") - pd.to_numeric(
             sfd["finish_position"], errors="coerce"
         )
         out = out.merge(sfd[["driver_number", "sfd"]], how="left", on="driver_number")
@@ -340,6 +378,7 @@ def _save_outputs_to_db(engine: Engine, **kwargs: Any) -> None:
     fact_race: pd.DataFrame = kwargs["fact_race"]
     feat_metrics: pd.DataFrame = kwargs["feat_metrics"]
     qpi_df: pd.DataFrame = kwargs["qpi_df"]
+    race_drivers: pd.DataFrame = kwargs.get("race_drivers", pd.DataFrame())
     race_pit_raw: pd.DataFrame = kwargs.get("race_pit", pd.DataFrame())
     sessions_df: pd.DataFrame = kwargs.get("sessions", pd.DataFrame())
     finish_probs: pd.DataFrame = kwargs["finish_probs"]
@@ -357,6 +396,7 @@ def _save_outputs_to_db(engine: Engine, **kwargs: Any) -> None:
         ("fact_pitstop", "session_id"),
         ("forecast_race", "target_session_id"),
         ("dim_session", "session_id"),
+        ("dim_driver_session", "session_id"),
         ("analysis_strategy", "session_id"),
     ]
     for table, col in delete_specs:
@@ -415,6 +455,41 @@ def _save_outputs_to_db(engine: Engine, **kwargs: Any) -> None:
                 dim["session_id"] = pd.to_numeric(dim["session_id"], errors="coerce").astype("Int64")
                 dim = _align_to_table(dim, "dim_session")
                 dim.to_sql("dim_session", engine, if_exists="append", index=False)
+
+    if not race_drivers.empty and "driver_number" in race_drivers.columns:
+        dds = race_drivers.copy()
+        dds["session_id"] = race_session_key
+        dds["driver_number"] = pd.to_numeric(dds["driver_number"], errors="coerce").astype("Int64")
+        for c in [
+            "full_name",
+            "first_name",
+            "last_name",
+            "name_acronym",
+            "team_name",
+            "team_colour",
+            "headshot_url",
+            "meeting_key",
+        ]:
+            if c not in dds.columns:
+                dds[c] = None
+        dds = dds[
+            [
+                "session_id",
+                "driver_number",
+                "full_name",
+                "first_name",
+                "last_name",
+                "name_acronym",
+                "team_name",
+                "team_colour",
+                "headshot_url",
+                "meeting_key",
+            ]
+        ]
+        dds = dds.dropna(subset=["driver_number"]).drop_duplicates(["session_id", "driver_number"], keep="last")
+        dds = _align_to_table(dds, "dim_driver_session")
+        if not dds.empty:
+            dds.to_sql("dim_driver_session", engine, if_exists="append", index=False)
 
     forecast = finish_probs.copy()
     forecast["target_session_id"] = race_session_key
@@ -504,6 +579,8 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
                     sr["driver_number"] = pd.to_numeric(sr["driver_number"], errors="coerce")
                     keep = [c for c in ["driver_number", "team_name", "grid_position"] if c in sr.columns]
                     quali_summary = quali_summary.merge(sr[keep], on="driver_number", how="left")
+                    if "grid_position" in quali_summary.columns and "starting_grid_position" not in quali_summary.columns:
+                        quali_summary = quali_summary.rename(columns={"grid_position": "starting_grid_position"})
 
             quali_sector = compute_sector_pcts(laps_quali)
             quali_progress = compute_quali_progress(laps_quali, session_result_quali)

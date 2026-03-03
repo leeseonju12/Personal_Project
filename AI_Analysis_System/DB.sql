@@ -39,15 +39,38 @@ CREATE TABLE IF NOT EXISTS dim_session (
 ) ENGINE=INNODB DEFAULT CHARSET=utf8mb4;
 
 -- ------------------------------------------------------------
+-- 1-1. dim_driver_session
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS dim_driver_session (
+  session_id     INT          NOT NULL,
+  driver_number  INT          NOT NULL,
+  full_name      VARCHAR(80)  NULL,
+  first_name     VARCHAR(40)  NULL,
+  last_name      VARCHAR(40)  NULL,
+  name_acronym   VARCHAR(8)   NULL,
+  team_name      VARCHAR(64)  NULL,
+  team_colour    CHAR(6)      NULL,
+  headshot_url   VARCHAR(255) NULL,
+  meeting_key    INT          NULL,
+  created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+                              ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (session_id, driver_number),
+  KEY ix_dim_driver_team (team_name),
+  KEY ix_dim_driver_name (full_name)
+) ENGINE=INNODB DEFAULT CHARSET=utf8mb4;
+
+-- ------------------------------------------------------------
 -- 2. fact_race_result
---    · grid_position / finish_position / number_of_laps → NULL 허용
+--    · starting_grid_position / finish_position / number_of_laps → NULL 허용
 --      (Python Int64 Nullable 타입 대응)
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS fact_race_result (
   session_id      INT           NOT NULL,
   driver_number   INT           NOT NULL,
+  driver_name     VARCHAR(80)   NULL,
   team_name       VARCHAR(64)   NULL,
-  grid_position   INT           NULL,          -- ✅ NULL 허용으로 변경
+  starting_grid_position INT    NULL,          -- ✅ NULL 허용으로 변경
   finish_position INT           NULL,          -- ✅ NULL 허용으로 변경
   points          DECIMAL(5,1)  NULL,
   STATUS          VARCHAR(32)   NULL,
@@ -189,6 +212,10 @@ CREATE OR REPLACE VIEW v_latest_dashboard AS
 SELECT
     fq.target_session_id                          AS session_id,
     fq.driver_number,
+    COALESCE(dds.full_name, frs.driver_name)     AS driver_name,
+    COALESCE(dds.team_name, frs.team_name)       AS team_name,
+    frs.starting_grid_position                    AS actual_starting_grid_pos,
+    frs.finish_position                           AS actual_finish_pos,
     fq.exp_grid_pos,
     fq.pole_prob,
     fq.top3_prob,
@@ -212,6 +239,12 @@ FROM forecast_quali fq
 JOIN forecast_race fr
     ON  fq.target_session_id = fr.target_session_id
     AND fq.driver_number     = fr.driver_number
+LEFT JOIN fact_race_result frs
+    ON  fq.target_session_id = frs.session_id
+    AND fq.driver_number     = frs.driver_number
+LEFT JOIN dim_driver_session dds
+    ON  fq.target_session_id = dds.session_id
+    AND fq.driver_number     = dds.driver_number
 LEFT JOIN analysis_strategy ast
     ON  fq.target_session_id = ast.session_id
     AND fq.driver_number     = ast.driver_number
