@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
@@ -10,18 +12,36 @@ import requests
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
-from ..models_finish_group import simulate_finish_group_probs
-from ..models_pace_band import LapDeltaBandConfig, simulate_lap_delta_bands
-from ..models_quali_analysis import (
-    compute_best_lap_qpi,
-    compute_improvement,
-    compute_quali_progress,
-    compute_sector_pcts,
-    compute_teammate_delta,
-    simulate_quali_probs,
-)
-from ..models_strategy_analysis import StrategyAnalysisConfig, build_strategy_analysis
-from .pipeline_season import run_one_meeting
+if __package__ in (None, ""):
+    # Allow direct script execution: python .../run_meeting.py
+    project_root = Path(__file__).resolve().parents[2]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from f1_analytics.models_finish_group import simulate_finish_group_probs
+    from f1_analytics.models_pace_band import LapDeltaBandConfig, simulate_lap_delta_bands
+    from f1_analytics.models_quali_analysis import (
+        compute_best_lap_qpi,
+        compute_improvement,
+        compute_quali_progress,
+        compute_sector_pcts,
+        compute_teammate_delta,
+        simulate_quali_probs,
+    )
+    from f1_analytics.models_strategy_analysis import StrategyAnalysisConfig, build_strategy_analysis
+    from f1_analytics.pipelines.pipeline_season import run_one_meeting
+else:
+    from ..models_finish_group import simulate_finish_group_probs
+    from ..models_pace_band import LapDeltaBandConfig, simulate_lap_delta_bands
+    from ..models_quali_analysis import (
+        compute_best_lap_qpi,
+        compute_improvement,
+        compute_quali_progress,
+        compute_sector_pcts,
+        compute_teammate_delta,
+        simulate_quali_probs,
+    )
+    from ..models_strategy_analysis import StrategyAnalysisConfig, build_strategy_analysis
+    from .pipeline_season import run_one_meeting
 
 OPENF1_BASE_URL = "https://api.openf1.org/v1"
 MIN_CLEAN_LAPS = 8
@@ -337,6 +357,7 @@ def _save_outputs_to_db(engine: Engine, **kwargs: Any) -> None:
         ("fact_pitstop", "session_id"),
         ("forecast_race", "target_session_id"),
         ("dim_session", "session_id"),
+        ("analysis_strategy", "session_id"),
     ]
     for table, col in delete_specs:
         try:
@@ -516,7 +537,11 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
 
     forecast = out["finish_probs"][["driver_number", "exp_points", "top10_prob", "podium_prob"]].copy()
 
-    race_session_key = int(out.get("race_session_key"))
+    race_session_key_raw = out.get("race_session_key")
+    if race_session_key_raw is None:
+        print("[WARN] race_session_key not found in output")
+        return [{"forecast": pd.DataFrame(columns=["driver_number", "exp_points", "top10_prob", "podium_prob"])}]
+    race_session_key = int(race_session_key_raw)
     # Persist quali forecast for DB querying.
     try:
         _save_quali_forecast_to_db(
@@ -529,6 +554,7 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
         print(f"[WARN] save forecast_quali failed: {exc}")
 
     # Persist strategy analysis snapshot for DB querying.
+    strategy_df = pd.DataFrame()
     try:
         strategy_df = build_strategy_analysis(
             engine=engine,
@@ -537,7 +563,6 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
         )
     except Exception as exc:
         print(f"[WARN] save strategy analysis failed: {exc}")
-        strategy_df = pd.DataFrame()
 
     return [
         {
@@ -547,6 +572,7 @@ def run_meeting_by_country(engine: Engine, year: int, country_name: str) -> list
             "quali_progress": quali_progress,
             "quali_improvement": quali_improvement,
             "quali_forecast": quali_forecast,
+            "band_probs": out.get("band_probs", pd.DataFrame()),
             "strategy_analysis": strategy_df,
             **out,
         }
