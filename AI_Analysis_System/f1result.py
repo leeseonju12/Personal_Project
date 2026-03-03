@@ -87,6 +87,5 @@ def main() -> None:
                 sort_by="pit_loss_percentile",
             )
 
-
 if __name__ == "__main__":
     main()

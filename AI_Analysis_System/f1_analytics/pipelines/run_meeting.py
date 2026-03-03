@@ -48,7 +48,6 @@ class OpenF1Client:
             print(f"[WARN] OpenF1 request failed: {path} params={params} err={exc}")
         return []
 
-
 def _pick_meeting_by_country(client: OpenF1Client, year: int, country_name: str) -> int | None:
     meetings = pd.DataFrame(client.get("meetings", {"year": year}))
     if meetings.empty:
@@ -70,7 +69,6 @@ def _pick_meeting_by_country(client: OpenF1Client, year: int, country_name: str)
     if matched.empty:
         return None
     return int(matched.iloc[-1]["meeting_key"])
-
 
 def _find_quali_session_key(client: OpenF1Client, meeting_key: int) -> int | None:
     sessions = pd.DataFrame(client.get("sessions", {"meeting_key": meeting_key}))
