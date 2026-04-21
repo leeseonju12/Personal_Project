@@ -1,6 +1,6 @@
 # Race Ready / F1 Analysis System
 
-<img width="1536" height="1024" alt="LOGO_RaceReady_Light" src="https://github.com/user-attachments/assets/03d110ac-5043-4391-8af8-423e2312d8d6" />
+<img width="1000" height="500" alt="LOGO_RaceReady_Light" src="https://github.com/user-attachments/assets/03d110ac-5043-4391-8af8-423e2312d8d6" />
 
 
 F1 데이터를 수집하고 분석한 뒤, 결과를 콘솔 또는 Spring Boot 웹페이지에서 확인하는 프로젝트입니다.
@@ -182,119 +182,6 @@ race-ready:
 ```
 
 DB 파일 위치가 바뀌면 `Race_Ready/src/main/resources/application.yaml`의 `race-ready.db-path` 값을 수정해야 합니다.
-
-## IntelliJ에서 Spring 실행
-
-1. IntelliJ IDEA 실행
-2. `Open` 선택
-3. 아래 폴더 열기
-
-```text
-C:\Users\LEE\Project_lsj_work\Personal_Project\Race_Ready
-```
-
-4. Maven 로딩이 끝날 때까지 대기
-5. `src/main/java/org/example/race_ready/RaceReadyApplication.java` 열기
-6. `main()` 옆 초록 실행 버튼 클릭
-7. `Run 'RaceReadyApplication'` 선택
-
-정상 실행되면 로그에 아래와 비슷한 문구가 나옵니다.
-
-```text
-Tomcat started on port 8080
-Started RaceReadyApplication
-```
-
-브라우저에서 접속합니다.
-
-```text
-http://localhost:8080
-```
-
-또는 직접 대시보드 API를 확인합니다.
-
-```text
-http://localhost:8080/api/dashboard
-```
-
-## Spring에서 Python을 직접 실행하는 방식
-
-가장 빠르게 Python 결과를 웹에 그대로 보여주려면 Spring Controller에서 Python 파일을 실행하고 stdout을 HTML에 출력하면 됩니다.
-
-실행해야 하는 Python 조합은 아래와 같습니다.
-
-```text
-실행 프로그램:
-C:/Users/LEE/Project_lsj_work/Personal_Project/AI_Analysis_System/.venv/Scripts/python.exe
-
-실행할 파일:
-AI_Analysis_System/f1result.py
-
-작업 디렉터리:
-C:/Users/LEE/Project_lsj_work/Personal_Project
-```
-
-Java `ProcessBuilder` 예시는 아래와 같습니다.
-
-```java
-ProcessBuilder pb = new ProcessBuilder(
-        "C:/Users/LEE/Project_lsj_work/Personal_Project/AI_Analysis_System/.venv/Scripts/python.exe",
-        "AI_Analysis_System/f1result.py"
-);
-
-pb.directory(new File("C:/Users/LEE/Project_lsj_work/Personal_Project"));
-pb.redirectErrorStream(true);
-```
-
-이 방식은 기존 Python 분석 코드를 거의 수정하지 않고 Spring 웹페이지에 결과를 표시할 수 있다는 장점이 있습니다.
-
-## 실행 전 확인 사항
-
-Python 가상환경이 정상인지 확인합니다.
-
-```powershell
-C:\Users\LEE\Project_lsj_work\Personal_Project\AI_Analysis_System\.venv\Scripts\python.exe -V
-```
-
-필요 패키지가 설치되어 있는지 확인합니다.
-
-```powershell
-C:\Users\LEE\Project_lsj_work\Personal_Project\AI_Analysis_System\.venv\Scripts\python.exe -c "import pandas, sqlalchemy, pymysql, requests, numpy; print('deps ok')"
-```
-
-Python 분석 코드가 단독으로 실행되는지 확인합니다.
-
-```powershell
-cd C:\Users\LEE\Project_lsj_work\Personal_Project
-.\AI_Analysis_System\.venv\Scripts\python.exe AI_Analysis_System\f1result.py
-```
-
-Spring 웹 프로젝트가 실행되는지 확인합니다.
-
-```powershell
-cd C:\Users\LEE\Project_lsj_work\Personal_Project\Race_Ready
-.\mvnw.cmd spring-boot:run
-```
-
-## 일반적인 문제 해결
-
-`ModuleNotFoundError`가 발생하면 시스템 Python이 아니라 프로젝트 가상환경 Python을 사용하고 있는지 확인합니다.
-
-```text
-올바른 Python:
-AI_Analysis_System/.venv/Scripts/python.exe
-```
-
-DB 연결 오류가 발생하면 MySQL 서버가 실행 중인지, `F1_DB_URL` 또는 `db.py`의 기본 URL이 맞는지 확인합니다.
-
-Spring 웹에서 데이터가 안 보이면 `application.yaml`의 SQLite DB 경로가 실제 파일 위치와 일치하는지 확인합니다.
-
-```yaml
-race-ready:
-  db-path: C:/Users/LEE/Project_lsj_work/Personal_Project/f1_analysis.db
-```
-
-`--starting-grid` 실행 결과가 비어 있으면 `meeting_key`, `session_key` 조합이 맞는지 확인해야 합니다.
 
 ## 권장 작업 흐름
 
