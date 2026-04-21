@@ -1,0 +1,6 @@
+spring:
+  application:
+    name: Race_Ready
+
+race-ready:
+  db-path: C:/Users/LEE/Project_lsj_work/Personal_Project/f1_analysis.db
