@@ -1,6 +1,7 @@
 # Race Ready / F1 Analysis System
 
-https://ibb.co/ym85TFhB
+<img width="1536" height="1024" alt="LOGO_RaceReady_Light" src="https://github.com/user-attachments/assets/03d110ac-5043-4391-8af8-423e2312d8d6" />
+
 
 F1 데이터를 수집하고 분석한 뒤, 결과를 콘솔 또는 Spring Boot 웹페이지에서 확인하는 프로젝트입니다.
 
